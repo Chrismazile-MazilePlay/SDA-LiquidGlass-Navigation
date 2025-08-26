@@ -23,11 +23,13 @@ struct NavigationDemoApp: App {
 enum AppState: Equatable {
     case browsing(BrowsingState)
     case searching(SearchState)
+    case loading(LoadingState)
     
     struct BrowsingState: Equatable {
         let activeTab: Tab
         let navigationPaths: [Tab: [NavigationDestination]]
         var modalPresentation: ModalPresentation?
+        var errorMessage: String?
     }
     
     struct SearchState: Equatable {
@@ -35,6 +37,13 @@ enum AppState: Equatable {
         let query: String
         let isKeyboardVisible: Bool
         let navigationPaths: [Tab: [NavigationDestination]]
+        var errorMessage: String?
+    }
+    
+    struct LoadingState: Equatable {
+        let activeTab: Tab
+        let navigationPaths: [Tab: [NavigationDestination]]
+        let context: String
     }
     
     struct ModalPresentation: Equatable {
@@ -49,7 +58,8 @@ extension AppState {
         BrowsingState(
             activeTab: .words,
             navigationPaths: Tab.allCases.reduce(into: [:]) { $0[$1] = [] },
-            modalPresentation: nil
+            modalPresentation: nil,
+            errorMessage: nil
         )
     )
     
@@ -60,7 +70,8 @@ extension AppState {
                 BrowsingState(
                     activeTab: tab,
                     navigationPaths: state.navigationPaths,
-                    modalPresentation: state.modalPresentation
+                    modalPresentation: state.modalPresentation,
+                    errorMessage: state.errorMessage
                 )
             )
         case .searching:
@@ -69,7 +80,16 @@ extension AppState {
                 BrowsingState(
                     activeTab: tab,
                     navigationPaths: currentNavigationPaths,
-                    modalPresentation: nil
+                    modalPresentation: nil,
+                    errorMessage: nil
+                )
+            )
+        case .loading(let state):
+            return .loading(
+                LoadingState(
+                    activeTab: tab,
+                    navigationPaths: state.navigationPaths,
+                    context: state.context
                 )
             )
         }
@@ -83,11 +103,23 @@ extension AppState {
                     activeTab: state.activeTab,
                     query: "",
                     isKeyboardVisible: true,
-                    navigationPaths: state.navigationPaths
+                    navigationPaths: state.navigationPaths,
+                    errorMessage: nil
                 )
             )
         case .searching:
             return self // Already searching
+        case .loading(let state):
+            // Cancel loading and start search
+            return .searching(
+                SearchState(
+                    activeTab: state.activeTab,
+                    query: "",
+                    isKeyboardVisible: true,
+                    navigationPaths: state.navigationPaths,
+                    errorMessage: nil
+                )
+            )
         }
     }
     
@@ -99,10 +131,11 @@ extension AppState {
                     activeTab: state.activeTab,
                     query: query,
                     isKeyboardVisible: state.isKeyboardVisible,
-                    navigationPaths: state.navigationPaths
+                    navigationPaths: state.navigationPaths,
+                    errorMessage: state.errorMessage
                 )
             )
-        case .browsing:
+        case .browsing, .loading:
             return self
         }
     }
@@ -114,16 +147,17 @@ extension AppState {
                 BrowsingState(
                     activeTab: state.activeTab,
                     navigationPaths: state.navigationPaths,
-                    modalPresentation: nil
+                    modalPresentation: nil,
+                    errorMessage: state.errorMessage
                 )
             )
-        case .browsing:
+        case .browsing, .loading:
             return self
         }
     }
     
     func navigate(to destination: NavigationDestination, presentation: PresentationStyle = .push) -> AppState {
-        // Navigation cancels search
+        // Navigation cancels search and loading
         let baseState: BrowsingState
         switch self {
         case .browsing(let state):
@@ -132,7 +166,15 @@ extension AppState {
             baseState = BrowsingState(
                 activeTab: state.activeTab,
                 navigationPaths: state.navigationPaths,
-                modalPresentation: nil
+                modalPresentation: nil,
+                errorMessage: state.errorMessage
+            )
+        case .loading(let state):
+            baseState = BrowsingState(
+                activeTab: state.activeTab,
+                navigationPaths: state.navigationPaths,
+                modalPresentation: nil,
+                errorMessage: nil
             )
         }
         
@@ -147,7 +189,8 @@ extension AppState {
                 BrowsingState(
                     activeTab: baseState.activeTab,
                     navigationPaths: paths,
-                    modalPresentation: baseState.modalPresentation
+                    modalPresentation: baseState.modalPresentation,
+                    errorMessage: baseState.errorMessage
                 )
             )
             
@@ -159,10 +202,116 @@ extension AppState {
                     modalPresentation: AppState.ModalPresentation(
                         destination: destination,
                         style: presentation
-                    )
+                    ),
+                    errorMessage: baseState.errorMessage
                 )
             )
         }
+    }
+    
+    // SOLUTION 2: Data Flow Optimization - Pure function for navigation path updates
+    func updateNavigationPath(_ newPath: [NavigationDestination], for tab: Tab) -> AppState {
+        var paths = currentNavigationPaths
+        paths[tab] = newPath
+        
+        switch self {
+        case .browsing(let state):
+            return .browsing(
+                BrowsingState(
+                    activeTab: state.activeTab,
+                    navigationPaths: paths,
+                    modalPresentation: state.modalPresentation,
+                    errorMessage: state.errorMessage
+                )
+            )
+        case .searching(let state):
+            return .searching(
+                SearchState(
+                    activeTab: state.activeTab,
+                    query: state.query,
+                    isKeyboardVisible: state.isKeyboardVisible,
+                    navigationPaths: paths,
+                    errorMessage: state.errorMessage
+                )
+            )
+        case .loading(let state):
+            return .loading(
+                LoadingState(
+                    activeTab: state.activeTab,
+                    navigationPaths: paths,
+                    context: state.context
+                )
+            )
+        }
+    }
+    
+    func setError(_ message: String) -> AppState {
+        switch self {
+        case .browsing(let state):
+            return .browsing(
+                BrowsingState(
+                    activeTab: state.activeTab,
+                    navigationPaths: state.navigationPaths,
+                    modalPresentation: state.modalPresentation,
+                    errorMessage: message
+                )
+            )
+        case .searching(let state):
+            return .searching(
+                SearchState(
+                    activeTab: state.activeTab,
+                    query: state.query,
+                    isKeyboardVisible: state.isKeyboardVisible,
+                    navigationPaths: state.navigationPaths,
+                    errorMessage: message
+                )
+            )
+        case .loading(let state):
+            return .browsing(
+                BrowsingState(
+                    activeTab: state.activeTab,
+                    navigationPaths: state.navigationPaths,
+                    modalPresentation: nil,
+                    errorMessage: message
+                )
+            )
+        }
+    }
+    
+    func clearError() -> AppState {
+        switch self {
+        case .browsing(let state):
+            return .browsing(
+                BrowsingState(
+                    activeTab: state.activeTab,
+                    navigationPaths: state.navigationPaths,
+                    modalPresentation: state.modalPresentation,
+                    errorMessage: nil
+                )
+            )
+        case .searching(let state):
+            return .searching(
+                SearchState(
+                    activeTab: state.activeTab,
+                    query: state.query,
+                    isKeyboardVisible: state.isKeyboardVisible,
+                    navigationPaths: state.navigationPaths,
+                    errorMessage: nil
+                )
+            )
+        case .loading:
+            return self
+        }
+    }
+    
+    func setLoading(context: String) -> AppState {
+        return .loading(
+            LoadingState(
+                activeTab: currentTab,
+                navigationPaths: currentNavigationPaths,
+                context: context
+            )
+        )
     }
     
     // Computed properties for easy access
@@ -170,6 +319,7 @@ extension AppState {
         switch self {
         case .browsing(let state): return state.activeTab
         case .searching(let state): return state.activeTab
+        case .loading(let state): return state.activeTab
         }
     }
     
@@ -177,20 +327,36 @@ extension AppState {
         switch self {
         case .browsing(let state): return state.navigationPaths
         case .searching(let state): return state.navigationPaths
+        case .loading(let state): return state.navigationPaths
         }
     }
     
     var searchQuery: String {
         switch self {
         case .searching(let state): return state.query
-        case .browsing: return ""
+        case .browsing, .loading: return ""
         }
     }
     
     var isSearchActive: Bool {
         switch self {
         case .searching: return true
-        case .browsing: return false
+        case .browsing, .loading: return false
+        }
+    }
+    
+    var currentError: String? {
+        switch self {
+        case .browsing(let state): return state.errorMessage
+        case .searching(let state): return state.errorMessage
+        case .loading: return nil
+        }
+    }
+    
+    var isLoading: Bool {
+        switch self {
+        case .loading: return true
+        case .browsing, .searching: return false
         }
     }
 }
@@ -314,57 +480,37 @@ struct ContentView: View {
 struct RootNavigationContainer: View {
     @State private var appState = AppState.initial
     @FocusState private var isSearchFieldFocused: Bool
-    @State private var searchText: String = ""
     
-    // Single source of truth for navigation paths - optimized
+    // SOLUTION 2: Simplified navigation path binding using pure function
     private func navigationPath(for tab: Tab) -> Binding<[NavigationDestination]> {
         Binding(
             get: { appState.currentNavigationPaths[tab] ?? [] },
             set: { newPath in
-                var paths = appState.currentNavigationPaths
-                paths[tab] = newPath
-                switch appState {
-                case .browsing(let state):
-                    appState = .browsing(
-                        AppState.BrowsingState(
-                            activeTab: state.activeTab,
-                            navigationPaths: paths,
-                            modalPresentation: state.modalPresentation
-                        )
-                    )
-                case .searching(let state):
-                    appState = .searching(
-                        AppState.SearchState(
-                            activeTab: state.activeTab,
-                            query: state.query,
-                            isKeyboardVisible: state.isKeyboardVisible,
-                            navigationPaths: paths
-                        )
-                    )
-                }
+                appState = appState.updateNavigationPath(newPath, for: tab)
             }
         )
     }
     
     var body: some View {
-        ZStack {
-            // Layer 0: Content with paging animation
-            TabView(selection: .constant(appState.currentTab.rawValue)) {
-                ForEach(Tab.allCases) { tab in
-                    NavigationStack(path: navigationPath(for: tab)) {
-                        tab.view
-                            .environment(\.appState, appState)
-                            .environment(\.dispatch, dispatch)
-                            .navigationDestination(for: NavigationDestination.self) { destination in
-                                DestinationView(destination: destination)
-                                    .environment(\.appState, appState)
-                                    .environment(\.dispatch, dispatch)
-                            }
+        NavigationStack {
+            ZStack {
+                // Layer 0: Content with paging animation
+                TabView(selection: .constant(appState.currentTab.rawValue)) {
+                    ForEach(Tab.allCases) { tab in
+                        NavigationStack(path: navigationPath(for: tab)) {
+                            tab.view
+                                .environment(\.appState, appState)
+                                .environment(\.dispatch, dispatch)
+                                .navigationDestination(for: NavigationDestination.self) { destination in
+                                    DestinationView(destination: destination)
+                                        .environment(\.appState, appState)
+                                        .environment(\.dispatch, dispatch)
+                                }
+                        }
+                        .tag(tab.rawValue)
                     }
-                    .tag(tab.rawValue)
                 }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+                .tabViewStyle(.page(indexDisplayMode: .never))
             
             // Layer 1: Fixed Navigation Bar
             FixedNavigationBar(
@@ -375,22 +521,20 @@ struct RootNavigationContainer: View {
                     DispatchQueue.main.async {
                         isSearchFieldFocused = true
                     }
-                },
-                onAdd: { dispatch(.navigate(.addWord, .fullscreen)) }
+                }
             )
             
             // Layer 2: Search Overlay (Conditional rendering)
             if appState.isSearchActive {
                 SearchOverlayView(
                     isSearchFieldFocused: $isSearchFieldFocused,
-                    searchText: $searchText,
+                    searchText: .constant(appState.searchQuery), // SOLUTION 3: Use single source of truth
                     placeholderText: getSearchPlaceholderText(),
                     isActive: appState.isSearchActive,
                     onSubmit: {
                         isSearchFieldFocused = false
                     },
                     onCancel: {
-                        searchText = ""
                         dispatch(.dismissSearch)
                         isSearchFieldFocused = false
                     },
@@ -402,6 +546,53 @@ struct RootNavigationContainer: View {
                 .transition(.move(edge: .bottom))
                 .zIndex(100)
             }
+            
+            // Layer 3: Loading Overlay
+            if appState.isLoading {
+                LoadingOverlayView()
+                    .ignoresSafeArea()
+                    .zIndex(200)
+            }
+            
+            // Layer 4: Error Alert
+            if let errorMessage = appState.currentError {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .zIndex(300)
+                
+                ErrorAlertView(message: errorMessage) {
+                    dispatch(.clearError)
+                }
+                                    .zIndex(301)
+            }
+        }
+        .navigationTitle(appState.currentTab.label)
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Add Word by Typing") {
+                        dispatch(.navigate(.addWord, .fullscreen))
+                    }
+                    Button("Add Word by Camera") {
+                        dispatch(.navigate(.addWord, .fullscreen))
+                    }
+                    Button("Add Book") {
+                        dispatch(.navigate(.addWord, .fullscreen))
+                    }
+                    Button("Add Collection") {
+                        dispatch(.navigate(.addWord, .fullscreen))
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .background(Color.accentColor.opacity(0.15))
+                        .foregroundStyle(Color.accentColor)
+                        .clipShape(Circle())
+                }
+            }
+        }
         }
         .sheet(item: sheetBinding) { destination in
             NavigationStack {
@@ -426,7 +617,6 @@ struct RootNavigationContainer: View {
         }
         .onChange(of: appState.isSearchActive) { _, isActive in
             if !isActive {
-                searchText = ""
                 isSearchFieldFocused = false
             }
         }
@@ -495,6 +685,12 @@ struct RootNavigationContainer: View {
                     state.modalPresentation = nil
                     appState = .browsing(state)
                 }
+            case .setError(let message):
+                appState = appState.setError(message)
+            case .clearError:
+                appState = appState.clearError()
+            case .setLoading(let context):
+                appState = appState.setLoading(context: context)
             }
         }
     }
@@ -509,6 +705,62 @@ enum AppAction {
     case updateSearchQuery(String)
     case navigate(NavigationDestination, PresentationStyle)
     case dismissModal
+    case setError(String)
+    case clearError
+    case setLoading(String)
+}
+
+// MARK: - Loading Overlay View
+
+struct LoadingOverlayView: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+            
+            VStack(spacing: 16) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.2)
+                
+                Text("Loading...")
+                    .foregroundStyle(.white)
+                    .font(.system(size: 16, weight: .medium))
+            }
+            .padding(24)
+            .background(Color.black.opacity(0.7))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
+// MARK: - Error Alert View
+
+struct ErrorAlertView: View {
+    let message: String
+    let onDismiss: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Error")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.primary)
+            
+            Text(message)
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            
+            Button("OK") {
+                onDismiss()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(24)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 8)
+        .padding(.horizontal, 40)
+    }
 }
 
 // MARK: - Fixed Navigation Bar (Optimized)
@@ -517,7 +769,6 @@ struct FixedNavigationBar: View {
     let selectedTab: Tab
     let onTabSelect: (Tab) -> Void
     let onSearch: () -> Void
-    let onAdd: () -> Void
     
     @Namespace private var pillAnimation
     
@@ -527,7 +778,7 @@ struct FixedNavigationBar: View {
             Spacer()
             HStack(spacing: 16) {
                 tabPillsView
-                actionButtonsView.padding(.trailing)
+                actionButtonsView
                 Spacer()
             }
             .padding(.bottom)
@@ -554,25 +805,14 @@ struct FixedNavigationBar: View {
         .frame(maxWidth: 250)
     }
 
-    /// The search and add action buttons.
+    /// The search action button.
     private var actionButtonsView: some View {
-        HStack(spacing: 10) {
-            Button(action: onSearch) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 20))
-                    .frame(width: 44, height: 44)
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(Circle())
-            }
-            
-            Button(action: onAdd) {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .semibold))
-                    .frame(width: 44, height: 44)
-                    .background(Color.accentColor.opacity(0.15))
-                    .foregroundStyle(Color.accentColor)
-                    .clipShape(Circle())
-            }
+        Button(action: onSearch) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 20))
+                .frame(width: 44, height: 44)
+                .background(Color.primary.opacity(0.05))
+                .clipShape(Circle())
         }
     }
 }
@@ -641,7 +881,7 @@ struct SearchOverlayView: View {
     }
 }
 
-// MARK: - Search Field View (Optimized - removed double state)
+// MARK: - Search Field View (Optimized)
 
 struct SearchFieldView: View {
     @FocusState.Binding var isSearchFieldFocused: Bool
@@ -669,7 +909,6 @@ struct SearchFieldView: View {
                 Button(action: {
                     if !searchText.isEmpty {
                         // Clear text only
-                        searchText = ""
                         onChange("")
                     } else {
                         // Cancel search entirely
@@ -700,77 +939,19 @@ struct SearchFieldView: View {
         .padding(.vertical, 8)
     }
     
-    // MARK: - Conditional Rendering for iOS Versions
-    
-    @ViewBuilder
     private var searchFieldBackground: some View {
-        // Note: Using iOS 18.0 as placeholder for future iOS 26 Liquid Glass UI
-        if #available(iOS 18.0, *) {
-            // Future iOS 26+ Liquid Glass UI
-            LiquidGlassBackground()
-        } else {
-            // Standard iOS UI (current versions)
-            StandardSearchBackground()
-        }
+        StandardSearchBackground()
     }
     
     private var searchFieldBorder: LinearGradient {
-        if #available(iOS 18.0, *) {
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(0.6),
-                    Color.white.opacity(0.2)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        } else {
-            return LinearGradient(
-                colors: [
-                    Color.primary.opacity(0.1),
-                    Color.primary.opacity(0.1)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-    }
-}
-
-// MARK: - Liquid Glass Background (iOS 26+)
-
-struct LiquidGlassBackground: View {
-    var body: some View {
-        ZStack {
-            // Base layer - ultra thin material
-            Rectangle()
-                .fill(.ultraThinMaterial)
-            
-            // Luminous overlay
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.05),
-                    Color.clear,
-                    Color.white.opacity(0.02)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            
-            // Subtle inner glow
-            Rectangle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.white.opacity(0.08),
-                            Color.clear
-                        ],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 100
-                    )
-                )
-        }
+        LinearGradient(
+            colors: [
+                Color.primary.opacity(0.1),
+                Color.primary.opacity(0.1)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 }
 
@@ -848,8 +1029,6 @@ struct WordsListView: View {
                 }
             }
         }
-        .navigationTitle("Words")
-        .navigationBarTitleDisplayMode(.large)
     }
 }
 
@@ -926,8 +1105,6 @@ struct CollectionsView: View {
             }
             .padding()
         }
-        .navigationTitle("Collections")
-        .navigationBarTitleDisplayMode(.large)
     }
 }
 
